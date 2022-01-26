@@ -1,7 +1,6 @@
 ---
-title: "FNL speech analysis"
-author: "Alex Salem"
-date: "5/20/2021"
+title: "ALM + AVM analysis"
+author: "Alexandra Salem and Heather MacFarlane"
 output:
   pdf_document: default
   html_document: default
@@ -52,6 +51,9 @@ raw_friends_voice_alm_data %>%
   filter(diagnosis_binary == "non-ASD") %>% 
   summarise(mean_gcc = mean(ccc2_gcc_standard_score), gcc_sd = sd(ccc2_gcc_standard_score), mean_struc = mean(ccc2_structural), struc_sd = sd(ccc2_structural), mean_prag = mean(ccc2_pragmatic), prag_sd = sd(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal, na.rm = T), rrb_sd = sd(ados2_3_scoresumm_rrbtotal, na.rm = T), mean_sa = mean(ados2_3_scoresumm_satotal, na.rm = T), sa_sd = sd(ados2_3_scoresumm_satotal, na.rm = T), mean_ados = mean(ados2_3_scoresumm_overall, na.rm = T), ados_sd = sd(ados2_3_scoresumm_overall, na.rm = T), mean_age = mean(age_years), age_sd = sd(age_years), mean_iq = mean(wisc_fsiq), iq_sd = sd(wisc_fsiq))
 
+
+raw_friends_voice_alm_data %>% filter(diagnosis_binary == "ASD") %>% count(ps_childethnicity)
+raw_friends_voice_alm_data %>% filter(diagnosis_binary == "ASD") %>% count(race_eric)
 
 raw_friends_voice_alm_data %>% filter(diagnosis_binary == "non-ASD") %>% count(ps_childethnicity)
 raw_friends_voice_alm_data %>% filter(diagnosis_binary == "non-ASD") %>% count(race_eric)
@@ -251,7 +253,7 @@ roc.test(roc(response = (roc_data %>% filter(model == "ALM"))$diag, predictor = 
 
 ```{r}
 roc_data_plot <- (
-  data.frame("pred" = friends_speech_predictions$speech_prob_asd, "diag" = friends_speech_predictions$diagnosis_binary, "Model" = "Speech\nAUC = 0.7800\n")) %>% bind_rows(
+  data.frame("pred" = friends_speech_predictions$speech_prob_asd, "diag" = friends_speech_predictions$diagnosis_binary, "Model" = "AVM\nAUC = 0.7800\n")) %>% bind_rows(
   data.frame("pred" = friends_alm_predictions$alm_prob_asd, "diag" = friends_alm_predictions$diagnosis_binary, "Model" = "ALM\nAUC = 0.8748\n")) %>% bind_rows(
     data.frame("pred" = friends_voice_alm_data_predictions$combo_prob_asd, diag = friends_voice_alm_data_predictions$diagnosis_binary, "Model" = "Combined\nAUC = 0.9205\n")
   )
@@ -265,7 +267,7 @@ roc_data_plot <- roc_data_plot %>%
 Figure 2:
 ```{r}
 ggplot(roc_data_plot, aes(m = pred, d =diag)) +
-  geom_roc(aes(color = Model), size = .7, labels = FALSE) + style_roc(xlab = "1 - Specificity", ylab = "Sensitivity", ) + scale_color_discrete(labels = c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "Speech\nAUC = 0.7800\n"), breaks=c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "Speech\nAUC = 0.7800\n")) + geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+  geom_roc(aes(color = Model), size = .7, labels = FALSE) + style_roc(xlab = "1 - Specificity", ylab = "Sensitivity", ) + scale_color_discrete(labels = c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "AVM\nAUC = 0.7800\n"), breaks=c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "AVM\nAUC = 0.7800\n")) + geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
                  color="darkgrey", linetype="dashed")
 #ggsave("figure1.pdf")
 ```
@@ -284,22 +286,22 @@ asd_missed <- alm_voice_combined_predictions %>%
   mutate(missed_by_combined = case_when(combo_pred == "non-ASD" ~ 'missed',
                                         TRUE ~ 'not missed'))
 
-asd_missed <- asd_missed %>% left_join(ccc2_ados_scores) #left_join(activity_meta %>% filter(activity == "friends") %>% select(ASDID, num_utts_total, total_num_words_fluent_intelligible, activity_time, child_gender)) #%>% mutate(child_gender = child_gender - 1)
+asd_missed <- asd_missed %>% left_join(ccc2_ados_scores) 
 
 
 asd_missed %>% 
   group_by(missed_by_language) %>% 
-  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time), mean(NDWR)) #%>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time), mean(NDWR)) #%>% 
   #xtable::xtable()
 
 asd_missed %>% 
   group_by(missed_by_speech) %>% 
-  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
   #xtable::xtable()
 
 asd_missed %>% 
   group_by(missed_by_combined) %>% 
-  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
   #xtable::xtable()
 ```
 
