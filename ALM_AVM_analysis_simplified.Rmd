@@ -1,0 +1,1387 @@
+---
+title: "FNL speech analysis"
+author: "Alex Salem"
+date: "5/20/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=80),tidy=TRUE)
+```
+
+# Main paper analyses
+
+## Loading libraries and data
+```{r, echo = FALSE}
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(readxl)
+library(knitr)
+library(kableExtra)
+library(plotROC)
+library(pROC)
+library(parsnip)
+library(tibble)
+library(yardstick)
+library(pander)
+library(e1071)
+library(caret)
+library(reshape)
+library(ggtext)
+source('./SVM-RFE/msvmRFE.R')
+```
+
+```{r}
+friends_svm_alm_data <- read_csv("friends_alm_raw_data.csv") %>% mutate(diagnosis_binary = as.factor(diagnosis_binary))
+friends_svm_speech_data <- read_csv("friends_avm_raw_data.csv") %>% mutate(diagnosis_binary = as.factor(diagnosis_binary))
+ccc2_ados_scores <- read_csv("friends_alm_avm_metadata.csv")
+
+raw_friends_voice_alm_data <- merge(friends_svm_alm_data, friends_svm_speech_data, by = c("ASDID", "diagnosis_binary")) %>% left_join(ccc2_ados_scores)
+```
+
+# Table 1: Sample characteristics
+```{r}
+raw_friends_voice_alm_data %>% 
+  filter(diagnosis_binary == "ASD") %>% 
+  summarise(mean_gcc = mean(ccc2_gcc_standard_score), gcc_sd = sd(ccc2_gcc_standard_score), mean_struc = mean(ccc2_structural), struc_sd = sd(ccc2_structural), mean_prag = mean(ccc2_pragmatic), prag_sd = sd(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal, na.rm = T), rrb_sd = sd(ados2_3_scoresumm_rrbtotal, na.rm = T), mean_sa = mean(ados2_3_scoresumm_satotal, na.rm = T), sa_sd = sd(ados2_3_scoresumm_satotal, na.rm = T), mean_ados = mean(ados2_3_scoresumm_overall, na.rm = T), ados_sd = sd(ados2_3_scoresumm_overall, na.rm = T), mean_age = mean(age_years), age_sd = sd(age_years), mean_iq = mean(wisc_fsiq), iq_sd = sd(wisc_fsiq))
+
+raw_friends_voice_alm_data %>% 
+  filter(diagnosis_binary == "non-ASD") %>% 
+  summarise(mean_gcc = mean(ccc2_gcc_standard_score), gcc_sd = sd(ccc2_gcc_standard_score), mean_struc = mean(ccc2_structural), struc_sd = sd(ccc2_structural), mean_prag = mean(ccc2_pragmatic), prag_sd = sd(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal, na.rm = T), rrb_sd = sd(ados2_3_scoresumm_rrbtotal, na.rm = T), mean_sa = mean(ados2_3_scoresumm_satotal, na.rm = T), sa_sd = sd(ados2_3_scoresumm_satotal, na.rm = T), mean_ados = mean(ados2_3_scoresumm_overall, na.rm = T), ados_sd = sd(ados2_3_scoresumm_overall, na.rm = T), mean_age = mean(age_years), age_sd = sd(age_years), mean_iq = mean(wisc_fsiq), iq_sd = sd(wisc_fsiq))
+
+
+raw_friends_voice_alm_data %>% filter(diagnosis_binary == "non-ASD") %>% count(ps_childethnicity)
+raw_friends_voice_alm_data %>% filter(diagnosis_binary == "non-ASD") %>% count(race_eric)
+```
+
+Significance testing:
+```{r}
+wilcox.test(ccc2_structural ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(age_years ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(child_gender ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+# Normalizing data for SVM models
+```{r}
+friends_svm_alm_data$MLUM = (friends_svm_alm_data$MLUM - min(friends_svm_alm_data$MLUM))/(max(friends_svm_alm_data$MLUM) - min(friends_svm_alm_data$MLUM))
+friends_svm_alm_data$NDWR = (friends_svm_alm_data$NDWR - min(friends_svm_alm_data$NDWR))/(max(friends_svm_alm_data$NDWR) - min(friends_svm_alm_data$NDWR))
+friends_svm_alm_data$c_units_per_minute = (friends_svm_alm_data$c_units_per_minute - min(friends_svm_alm_data$c_units_per_minute))/(max(friends_svm_alm_data$c_units_per_minute) - min(friends_svm_alm_data$c_units_per_minute))
+```
+
+```{r}
+friends_svm_speech_data <- friends_svm_speech_data[order(friends_svm_speech_data$ASDID),]
+friends_svm_speech_data$Cepstrum = (friends_svm_speech_data$Cepstrum - min(friends_svm_speech_data$Cepstrum))/(max(friends_svm_speech_data$Cepstrum)-min(friends_svm_speech_data$Cepstrum))
+friends_svm_speech_data$DeltaCepstrum = (friends_svm_speech_data$DeltaCepstrum - min(friends_svm_speech_data$DeltaCepstrum))/(max(friends_svm_speech_data$DeltaCepstrum)-min(friends_svm_speech_data$DeltaCepstrum))
+friends_svm_speech_data$DeltaDeltaCepstrum = (friends_svm_speech_data$DeltaDeltaCepstrum - min(friends_svm_speech_data$DeltaDeltaCepstrum))/(max(friends_svm_speech_data$DeltaDeltaCepstrum)-min(friends_svm_speech_data$DeltaDeltaCepstrum))
+friends_svm_speech_data$LogSpectralEntropy = (friends_svm_speech_data$LogSpectralEntropy - min(friends_svm_speech_data$LogSpectralEntropy))/(max(friends_svm_speech_data$LogSpectralEntropy)-min(friends_svm_speech_data$LogSpectralEntropy))
+friends_svm_speech_data$F0 = (friends_svm_speech_data$F0 - min(friends_svm_speech_data$F0))/(max(friends_svm_speech_data$F0)-min(friends_svm_speech_data$F0)) 
+friends_svm_speech_data$Jitter = (friends_svm_speech_data$Jitter - min(friends_svm_speech_data$Jitter))/(max(friends_svm_speech_data$Jitter)-min(friends_svm_speech_data$Jitter))
+friends_svm_speech_data$Shimmer = (friends_svm_speech_data$Shimmer - min(friends_svm_speech_data$Shimmer))/(max(friends_svm_speech_data$Shimmer)-min(friends_svm_speech_data$Shimmer))
+friends_svm_speech_data$HNR = (friends_svm_speech_data$HNR - min(friends_svm_speech_data$HNR))/(max(friends_svm_speech_data$HNR)-min(friends_svm_speech_data$HNR))
+friends_svm_speech_data$H1H2 = (friends_svm_speech_data$H1H2 - min(friends_svm_speech_data$H1H2))/(max(friends_svm_speech_data$H1H2)-min(friends_svm_speech_data$H1H2))
+friends_svm_speech_data$RMS = (friends_svm_speech_data$RMS - min(friends_svm_speech_data$RMS))/(max(friends_svm_speech_data$RMS)-min(friends_svm_speech_data$RMS))
+```
+
+```{r}
+friends_voice_alm_data <- merge(friends_svm_alm_data, friends_svm_speech_data, by = c("ASDID", "diagnosis_binary"))
+```
+
+
+## Table 2: SVM models in main paper
+```{r}
+k <- 158
+folds <- c(1:158)
+```
+
+AVM model:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS, data = friends_svm_speech_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 10, probability = T)
+  pred <- predict(model, friends_svm_speech_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_speech_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_speech <- do.call(rbind, z)
+caret::confusionMatrix(pred_speech$pred, pred_speech$true)
+```
+
+```{r}
+roc(response = pred_speech$true, predictor = pred_speech$prob_asd, ci = T)
+```
+
+```{r}
+friends_speech_predictions <- bind_cols(pred_speech %>% select(pred, prob_asd), friends_svm_speech_data) %>%
+  select(speech_pred = pred, speech_prob_asd = prob_asd, everything())
+```
+
+ALM model:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary ~ MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_svm_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 1, probability = T)
+  pred <- predict(model, friends_svm_alm_data[folds == x, ])
+  true <- friends_svm_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_alm_data[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$pred, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd, ci = T)
+```
+
+```{r}
+friends_alm_predictions <- bind_cols(pred_alm %>% select(pred, prob_asd), friends_svm_alm_data) %>%
+  select(alm_pred = pred, alm_prob_asd = prob_asd, everything())
+```
+
+Combined model:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_combined <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined$pred, pred_combined$true)
+```
+
+```{r}
+roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T)
+```
+
+```{r}
+friends_voice_alm_data_predictions <- bind_cols(pred_combined %>% select(pred, prob_asd), friends_voice_alm_data) %>%
+  select(combo_pred = pred, combo_prob_asd = prob_asd, everything())
+```
+
+Predictions from all three models:
+```{r}
+alm_voice_combined_predictions <- merge(friends_alm_predictions, friends_speech_predictions)
+alm_voice_combined_predictions <- merge(alm_voice_combined_predictions, friends_voice_alm_data_predictions)
+```
+
+
+## Figure 2: ROC graph of three models
+
+```{r}
+roc_data <- (
+  data.frame("pred" = friends_speech_predictions$speech_prob_asd, "diag" = friends_speech_predictions$diagnosis_binary, "model" = "speech")) %>% bind_rows(
+  data.frame("pred" = friends_alm_predictions$alm_prob_asd, "diag" = friends_alm_predictions$diagnosis_binary, "model" = "ALM")) %>% bind_rows(
+    data.frame("pred" = friends_voice_alm_data_predictions$combo_prob_asd, diag = friends_voice_alm_data_predictions$diagnosis_binary, "model" = "combo")
+  )
+```
+
+```{r}
+roc_data <- roc_data %>% 
+  mutate(diag = case_when(diag == "ASD" ~ 1, TRUE ~ 0))
+```
+
+
+```{r}
+calc_auc(ggplot(roc_data, aes(m = pred, d =diag)) +
+  geom_roc(aes(color = model), size = .7, labels = FALSE))
+```
+
+```{r}
+roc(response = (roc_data %>% filter(model == "speech"))$diag, predictor = (roc_data %>% filter(model == "speech"))$pred, ci = T)
+```
+
+```{r}
+roc(response = (roc_data %>% filter(model == "ALM"))$diag, predictor = (roc_data %>% filter(model == "ALM"))$pred, ci = T)
+```
+
+```{r}
+roc(response = (roc_data %>% filter(model == "combo"))$diag, predictor = (roc_data %>% filter(model == "combo"))$pred, ci = T)
+```
+
+Significance testing:
+```{r}
+roc.test(roc(response = (roc_data %>% filter(model == "combo"))$diag, predictor = (roc_data %>% filter(model == "combo"))$pred, ci = T), roc(response = (roc_data %>% filter(model == "ALM"))$diag, predictor = (roc_data %>% filter(model == "ALM"))$pred, ci = T))
+```
+
+```{r}
+roc.test(roc(response = (roc_data %>% filter(model == "combo"))$diag, predictor = (roc_data %>% filter(model == "combo"))$pred, ci = T), roc(response = (roc_data %>% filter(model == "speech"))$diag, predictor = (roc_data %>% filter(model == "speech"))$pred, ci = T))
+```
+
+```{r}
+roc.test(roc(response = (roc_data %>% filter(model == "ALM"))$diag, predictor = (roc_data %>% filter(model == "ALM"))$pred, ci = T), roc(response = (roc_data %>% filter(model == "speech"))$diag, predictor = (roc_data %>% filter(model == "speech"))$pred, ci = T))
+```
+
+```{r}
+roc_data_plot <- (
+  data.frame("pred" = friends_speech_predictions$speech_prob_asd, "diag" = friends_speech_predictions$diagnosis_binary, "Model" = "Speech\nAUC = 0.7800\n")) %>% bind_rows(
+  data.frame("pred" = friends_alm_predictions$alm_prob_asd, "diag" = friends_alm_predictions$diagnosis_binary, "Model" = "ALM\nAUC = 0.8748\n")) %>% bind_rows(
+    data.frame("pred" = friends_voice_alm_data_predictions$combo_prob_asd, diag = friends_voice_alm_data_predictions$diagnosis_binary, "Model" = "Combined\nAUC = 0.9205\n")
+  )
+```
+
+```{r}
+roc_data_plot <- roc_data_plot %>% 
+  mutate(diag = case_when(diag == "ASD" ~ 1, TRUE ~ 0))
+```
+
+Figure 2:
+```{r}
+ggplot(roc_data_plot, aes(m = pred, d =diag)) +
+  geom_roc(aes(color = Model), size = .7, labels = FALSE) + style_roc(xlab = "1 - Specificity", ylab = "Sensitivity", ) + scale_color_discrete(labels = c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "Speech\nAUC = 0.7800\n"), breaks=c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "Speech\nAUC = 0.7800\n")) + geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
+                 color="darkgrey", linetype="dashed")
+#ggsave("figure1.pdf")
+```
+
+## Table 3: Post-hoc analysis of characteristics of detected and missed participants
+
+
+Characteristics:
+```{r}
+asd_missed <- alm_voice_combined_predictions %>% 
+  filter(diagnosis_binary == "ASD") %>% 
+  mutate(missed_by_language = case_when(alm_pred == "non-ASD"~ 'missed',
+                                        TRUE ~ 'not missed')) %>% 
+  mutate(missed_by_speech = case_when(speech_pred == "non-ASD" ~ "missed",
+                                      TRUE ~ 'not missed')) %>% 
+  mutate(missed_by_combined = case_when(combo_pred == "non-ASD" ~ 'missed',
+                                        TRUE ~ 'not missed'))
+
+asd_missed <- asd_missed %>% left_join(ccc2_ados_scores) #left_join(activity_meta %>% filter(activity == "friends") %>% select(ASDID, num_utts_total, total_num_words_fluent_intelligible, activity_time, child_gender)) #%>% mutate(child_gender = child_gender - 1)
+
+
+asd_missed %>% 
+  group_by(missed_by_language) %>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time), mean(NDWR)) #%>% 
+  #xtable::xtable()
+
+asd_missed %>% 
+  group_by(missed_by_speech) %>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  #xtable::xtable()
+
+asd_missed %>% 
+  group_by(missed_by_combined) %>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal), mean_sa = mean(ados2_3_scoresumm_satotal), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  #xtable::xtable()
+```
+
+Counts of detected/missed for each model:
+```{r}
+asd_missed %>% 
+  group_by(missed_by_language) %>% 
+  count()
+```
+
+```{r}
+asd_missed %>% 
+  group_by(missed_by_speech) %>% 
+  count()
+```
+
+```{r}
+asd_missed %>% 
+  group_by(missed_by_combined) %>% 
+  count()
+```
+
+
+Significance testing:
+```{r}
+wilcox.test(ccc2_structural ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(age_years ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(num_utts_total ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(total_num_words_fluent_intelligible ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(activity_time ~ missed_by_language, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_structural ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(age_years ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(num_utts_total ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(total_num_words_fluent_intelligible ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(activity_time ~ missed_by_speech, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_structural ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_overall ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(age_years ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(num_utts_total ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(total_num_words_fluent_intelligible ~ missed_by_combined, data = asd_missed)
+```
+
+```{r}
+wilcox.test(activity_time ~ missed_by_combined, data = asd_missed)
+```
+
+# Supplemental information analyses 
+## Supplemental table 1: Means, standard deviations, significance
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(MLUM), max(MLUM), mean(MLUM), sd(MLUM)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(NDWR), max(NDWR), mean(NDWR), sd(NDWR)) %>% 
+  xtable::xtable()
+```
+
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(um_ratio), max(um_ratio), mean(um_ratio), sd(um_ratio)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(content_ratio), max(content_ratio), mean(content_ratio), sd(content_ratio)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(unintelligible_proportion), max(unintelligible_proportion), mean(unintelligible_proportion), sd(unintelligible_proportion)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(c_units_per_minute), max(c_units_per_minute), mean(c_units_per_minute), sd(c_units_per_minute)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(repeating_others_prop), max(repeating_others_prop), mean(repeating_others_prop), sd(repeating_others_prop)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(Cepstrum), max(Cepstrum), mean(Cepstrum), sd(Cepstrum)) %>% 
+  xtable::xtable(digits = 4)
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(DeltaCepstrum), max(DeltaCepstrum), mean(DeltaCepstrum), sd(DeltaCepstrum)) %>% 
+  xtable::xtable(digits = 4)
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(DeltaDeltaCepstrum), max(DeltaDeltaCepstrum), mean(DeltaDeltaCepstrum), sd(DeltaDeltaCepstrum)) %>% 
+  xtable::xtable(digits = 4)
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(LogSpectralEntropy), max(LogSpectralEntropy), mean(LogSpectralEntropy), sd(LogSpectralEntropy)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(F0), max(F0), mean(F0), sd(F0)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(Jitter), max(Jitter), mean(Jitter), sd(Jitter)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(Shimmer), max(Shimmer), mean(Shimmer), sd(Shimmer)) %>% 
+  xtable::xtable(digits = 4)
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(HNR), max(HNR), mean(HNR), sd(HNR)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(H1H2), max(H1H2), mean(H1H2), sd(H1H2)) %>% 
+  xtable::xtable()
+```
+
+```{r}
+raw_friends_voice_alm_data %>% 
+  group_by(diagnosis_binary) %>% 
+  summarise(min(RMS), max(RMS), mean(RMS), sd(RMS)) %>% 
+  xtable::xtable()
+```
+
+Significance testing:
+```{r}
+wilcox.test(MLUM ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(NDWR ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(um_ratio ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(content_ratio ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(unintelligible_proportion ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(c_units_per_minute ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(repeating_others_prop ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(Cepstrum ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(DeltaCepstrum ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(DeltaDeltaCepstrum ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(LogSpectralEntropy ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(F0 ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(Jitter ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(Shimmer ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(HNR ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(H1H2 ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+wilcox.test(RMS ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+Effect sizes:
+```{r}
+rstatix::wilcox_effsize(MLUM ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(NDWR ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(um_ratio ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(content_ratio ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(unintelligible_proportion ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(c_units_per_minute ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(repeating_others_prop ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(Cepstrum ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(DeltaCepstrum ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(DeltaDeltaCepstrum ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(LogSpectralEntropy ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(F0 ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(Jitter ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(Shimmer ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(HNR ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(H1H2 ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+```{r}
+rstatix::wilcox_effsize(RMS ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+```
+
+## Supplemental table 3: Detected and Missed Averaged Characteristics of non-ASD participants
+Characteristics:
+```{r}
+non_asd_missed <- alm_voice_combined_predictions %>% 
+  filter(diagnosis_binary == "non-ASD") %>% 
+  mutate(missed_by_language = case_when(alm_pred == "ASD"~ 'missed',
+                                        TRUE ~ 'not missed')) %>% 
+  mutate(missed_by_speech = case_when(speech_pred == "ASD" ~ "missed",
+                                      TRUE ~ 'not missed')) %>% 
+  mutate(missed_by_combined = case_when(combo_pred == "ASD" ~ 'missed',
+                                        TRUE ~ 'not missed'))
+
+non_asd_missed <- non_asd_missed %>% left_join(ccc2_ados_scores)
+
+
+non_asd_missed %>% 
+  group_by(missed_by_language) %>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal, na.rm = T), mean_sa = mean(ados2_3_scoresumm_satotal, na.rm = T), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  #xtable::xtable()
+
+non_asd_missed %>% 
+  group_by(missed_by_speech) %>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal, na.rm = T), mean_sa = mean(ados2_3_scoresumm_satotal, na.rm = T), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  #xtable::xtable()
+
+non_asd_missed %>% 
+  group_by(missed_by_combined) %>% 
+  summarise(mean_struc = mean(ccc2_structural), mean_prag = mean(ccc2_pragmatic), mean_rrb = mean(ados2_3_scoresumm_rrbtotal, na.rm = T), mean_sa = mean(ados2_3_scoresumm_satotal, na.rm = T), mean_age = mean(age_years), mean_iq = mean(wisc_fsiq), perc_female = mean(child_gender), mean_utts = mean(num_utts_total), mean_words = mean(total_num_words_fluent_intelligible), mean_time = mean(activity_time)) #%>% 
+  #xtable::xtable()
+```
+
+Counts:
+```{r}
+non_asd_missed %>% 
+  group_by(missed_by_language) %>% 
+  count()
+```
+
+```{r}
+non_asd_missed %>% 
+  group_by(missed_by_speech) %>% 
+  count()
+```
+
+```{r}
+non_asd_missed %>% 
+  group_by(missed_by_combined) %>% 
+  count()
+```
+
+Significance testing:
+```{r}
+wilcox.test(ccc2_structural ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(age_years ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(num_utts_total ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(total_num_words_fluent_intelligible ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(activity_time ~ missed_by_language, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_structural ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(age_years ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(num_utts_total ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(total_num_words_fluent_intelligible ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(activity_time ~ missed_by_speech, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_structural ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ccc2_pragmatic ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_rrbtotal ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_satotal ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(ados2_3_scoresumm_overall ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(age_years ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(wisc_fsiq ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(num_utts_total ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(total_num_words_fluent_intelligible ~ missed_by_combined, data = non_asd_missed)
+```
+
+```{r}
+wilcox.test(activity_time ~ missed_by_combined, data = non_asd_missed)
+```
+
+## RFE feature selection
+
+```{r}
+friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time)
+```
+
+Order of columns for RFE:
+1- MLUM
+2- NDWR
+3- content_ratio
+4- um_ratio
+5- c_units_per_minute
+6- unintelligible_proportion
+7- repeating_others_prop
+8- Cepstrum
+9- DeltaCepstrum
+10- DeltaDeltaCepstrum
+11- LogSpectralEntropy
+12- F0
+13- Jitter
+14- Shimmer
+15- HNR
+16- H1H2
+17- RMS
+
+
+```{r}
+set.seed(42)
+results <- svmRFE(friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time), k = 158)
+```
+
+Order of importance from greatest to least
+```{r}
+results
+```
+
+Ranked importance by name:
+content, CPM, RMS, um, F0, Shimmer, MLUM, HNR, DeltaCepstrum, NDWR, LogSpectralEntropy, Cepstrum, Jitter, DeltaDeltaCepstrum, unintelligible, H1H2, repeating
+
+Removing 5 lowest importance features:
+```{r}
+k <- 158
+folds <- c(1:158)
+```
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + LogSpectralEntropy + F0 + Shimmer + HNR + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_combined_small <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_small$pred, pred_combined_small$true)
+```
+
+
+```{r}
+roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T)
+```
+
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T))
+```
+
+## Supplemental table 2: Logistic regression models
+
+```{r}
+k <- 158
+folds <- c(1:158)
+```
+
+AVM:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = logistic_reg(mode = "classification") %>% set_engine("glm") %>% fit(diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS, data = friends_svm_speech_data[folds != x, ])
+  pred <- model %>% predict(new_data = friends_svm_speech_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- model %>% predict(new_data = friends_svm_speech_data[folds == x, ], type = "prob")
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_speech <- do.call(rbind, z)
+caret::confusionMatrix(pred_speech$.pred_class, pred_speech$true)
+```
+
+```{r}
+roc(response = pred_speech$true, predictor = pred_speech$prob_asd..pred_non.ASD, ci = T)
+```
+
+ALM:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = logistic_reg(mode = "classification") %>% set_engine("glm") %>% fit(diagnosis_binary ~ MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_svm_alm_data[folds != x, ])
+  pred <- model %>% predict(new_data = friends_svm_alm_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- model %>% predict(new_data = friends_svm_alm_data[folds == x, ], type = "prob")
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$.pred_class, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd..pred_non.ASD, ci = T)
+```
+
+
+Combined:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = logistic_reg(mode = "classification") %>% set_engine("glm") %>% fit(diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ])
+  pred <- model %>% predict(new_data = friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- model %>% predict(new_data = friends_voice_alm_data[folds == x, ], type = "prob")
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$.pred_class, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd..pred_non.ASD, ci = T)
+```
+
+
+## Supplemental table 2: Variations of SVM, all with leave-one-out cross validation
+
+```{r}
+k <- 158
+folds <- c(1:158)
+```
+
+### AVM variations
+
+Tuning cost and gamma, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS, data = friends_svm_speech_data[folds != x, ], kernel = "radial", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100), gamma = c(.001, 1/17, .01, 1, 10, 100)), probability = T)
+  pred <- predict(model, friends_svm_speech_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_speech_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_speech <- do.call(rbind, z)
+caret::confusionMatrix(pred_speech$pred, pred_speech$true)
+```
+
+```{r}
+roc(response = pred_speech$true, predictor = pred_speech$prob_asd, ci = T)
+```
+
+Tuning cost, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS, data = friends_svm_speech_data[folds != x, ], kernel = "radial", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100)), probability = T)
+  pred <- predict(model, friends_svm_speech_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_speech_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_speech <- do.call(rbind, z)
+caret::confusionMatrix(pred_speech$pred, pred_speech$true)
+```
+
+```{r}
+roc(response = pred_speech$true, predictor = pred_speech$prob_asd, ci = T)
+```
+
+Tuning cost, linear:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS, data = friends_svm_speech_data[folds != x, ], kernel = "linear", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100)), probability = T)
+  pred <- predict(model, friends_svm_speech_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_speech_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_speech <- do.call(rbind, z)
+caret::confusionMatrix(pred_speech$pred, pred_speech$true)
+```
+
+```{r}
+roc(response = pred_speech$true, predictor = pred_speech$prob_asd, ci = T)
+```
+
+No tuning, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary ~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS, data = friends_svm_speech_data[folds != x, ], kernel = "radial", scale = FALSE, cost = 10, probability = T)
+  pred <- predict(model, friends_svm_speech_data[folds == x, ])
+  true <- friends_svm_speech_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_speech_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_speech <- do.call(rbind, z)
+caret::confusionMatrix(pred_speech$pred, pred_speech$true)
+```
+
+```{r}
+roc(response = pred_speech$true, predictor = pred_speech$prob_asd, ci = T)
+```
+
+### ALM variations
+```{r}
+k <- 158
+folds <- c(1:158) 
+```
+
+Tuning cost and gamma, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary ~ MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_svm_alm_data[folds != x, ], kernel = "radial", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100), gamma = c(.001, 1/17, .01, 1, 10, 100)), probability = T)
+  pred <- predict(model, friends_svm_alm_data[folds == x, ])
+  true <- friends_svm_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_alm_data[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$pred, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd, ci = T)
+```
+
+Tuning cost, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary ~ MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_svm_alm_data[folds != x, ], kernel = "radial", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100)), probability = T)
+  pred <- predict(model, friends_svm_alm_data[folds == x, ])
+  true <- friends_svm_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_alm_data[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$pred, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd, ci = T)
+```
+
+Tuning cost, linear:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary ~ MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_svm_alm_data[folds != x, ], kernel = "linear", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100)), probability = T)
+  pred <- predict(model, friends_svm_alm_data[folds == x, ])
+  true <- friends_svm_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_alm_data[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$pred, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd, ci = T)
+```
+
+No tuning, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary ~ MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_svm_alm_data[folds != x, ], kernel = "radial", scale = FALSE, cost = 1, probability = T)
+  pred <- predict(model, friends_svm_alm_data[folds == x, ])
+  true <- friends_svm_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_svm_alm_data[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_alm <- do.call(rbind, z)
+caret::confusionMatrix(pred_alm$pred, pred_alm$true)
+```
+
+```{r}
+roc(response = pred_alm$true, predictor = pred_alm$prob_asd, ci = T)
+```
+
+### Combined speech and language variations
+```{r}
+k <- 158
+folds <- c(1:158) 
+```
+
+Tuning cost and gamma, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "radial", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100,500), gamma = c(.001, 1/17, .01, 1, 10, 100)), probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+```{r}
+pred_combined <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined$pred, pred_combined$true)
+```
+
+```{r}
+roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T)
+```
+
+Tuning cost, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "radial", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100,500)), probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+```{r}
+pred_combined <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined$pred, pred_combined$true)
+```
+
+```{r}
+roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T)
+```
+
+Tuning cost, linear:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model <- best.tune(svm, diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, ranges =list(cost=c(0.001,0.01,0.1, 1,5,10,100,500)), probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+```{r}
+pred_combined <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined$pred, pred_combined$true)
+```
+
+```{r}
+roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T)
+```
+
+No tuning, radial:
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "radial", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+```{r}
+pred_combined <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined$pred, pred_combined$true)
+```
+
+```{r}
+roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T)
+```
+
+
+## Combined SVM with 10-fold cross validation
+```{r}
+k <- 10
+folds <- sample(rep(1:k, length.out = nrow(friends_voice_alm_data)), nrow(friends_voice_alm_data)) 
+```
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+```{r}
+pred_combined_ten <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_ten$pred, pred_combined_ten$true)
+```
+
+```{r}
+roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T)
+```
+
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T))
+```
+
+## SVMs on separated sexes
+
+Boys:
+```{r}
+friends_voice_alm_data_boys <- friends_voice_alm_data %>% left_join(ccc2_ados_scores) %>% filter(child_gender == 1) %>% select(-starts_with("ados"))
+```
+
+
+```{r}
+k <- 113
+folds <- c(1:113)
+```
+
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data_boys[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data_boys[folds == x, ])
+  true <- friends_voice_alm_data_boys$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data_boys[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+
+```{r}
+pred_combined_boys <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_boys$pred, pred_combined_boys$true)
+```
+
+```{r}
+roc(response = pred_combined_boys$true, predictor = pred_combined_boys$prob_asd, ci = T)
+```
+
+
+Girls:
+```{r}
+friends_voice_alm_data_girls <- friends_voice_alm_data %>% left_join(ccc2_ados_scores) %>% filter(child_gender == 2)
+```
+
+```{r}
+k <- 45
+folds <- c(1:45) 
+```
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data_girls[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data_girls[folds == x, ])
+  true <- friends_voice_alm_data_girls$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data_girls[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_combined_girls <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_girls$pred, pred_combined_girls$true)
+```
+
+```{r}
+roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T)
+```
+
+Testing significance:
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_boys$true, predictor = pred_combined_boys$prob_asd, ci = T))
+```
+
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T))
+```
