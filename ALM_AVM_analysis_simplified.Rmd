@@ -41,7 +41,7 @@ ccc2_ados_scores <- read_csv("friends_alm_avm_metadata.csv")
 raw_friends_voice_alm_data <- merge(friends_svm_alm_data, friends_svm_speech_data, by = c("ASDID", "diagnosis_binary")) %>% left_join(ccc2_ados_scores)
 ```
 
-# Table 1: Sample characteristics
+## Table 1: Sample characteristics
 ```{r}
 raw_friends_voice_alm_data %>% 
   filter(diagnosis_binary == "ASD") %>% 
@@ -85,10 +85,11 @@ wilcox.test(wisc_fsiq ~ diagnosis_binary, data = raw_friends_voice_alm_data)
 ```
 
 ```{r}
-wilcox.test(child_gender ~ diagnosis_binary, data = raw_friends_voice_alm_data)
+fisher.test(x = raw_friends_voice_alm_data$child_gender, y = raw_friends_voice_alm_data$diagnosis_binary)
 ```
 
-# Normalizing data for SVM models
+
+## Normalizing data for SVM models
 ```{r}
 friends_svm_alm_data$MLUM = (friends_svm_alm_data$MLUM - min(friends_svm_alm_data$MLUM))/(max(friends_svm_alm_data$MLUM) - min(friends_svm_alm_data$MLUM))
 friends_svm_alm_data$NDWR = (friends_svm_alm_data$NDWR - min(friends_svm_alm_data$NDWR))/(max(friends_svm_alm_data$NDWR) - min(friends_svm_alm_data$NDWR))
@@ -204,7 +205,6 @@ alm_voice_combined_predictions <- merge(friends_alm_predictions, friends_speech_
 alm_voice_combined_predictions <- merge(alm_voice_combined_predictions, friends_voice_alm_data_predictions)
 ```
 
-
 ## Figure 2: ROC graph of three models
 
 ```{r}
@@ -268,9 +268,191 @@ Figure 2:
 ```{r}
 ggplot(roc_data_plot, aes(m = pred, d =diag)) +
   geom_roc(aes(color = Model), size = .7, labels = FALSE) + style_roc(xlab = "1 - Specificity", ylab = "Sensitivity", ) + scale_color_discrete(labels = c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "AVM\nAUC = 0.7800\n"), breaks=c("Combined\nAUC = 0.9205\n", "ALM\nAUC = 0.8748\n", "AVM\nAUC = 0.7800\n")) + geom_segment(aes(x = 0, xend = 1, y = 0, yend = 1),
-                 color="darkgrey", linetype="dashed")
-#ggsave("figure1.pdf")
+                 color="darkgrey", linetype="dashed") +
+  theme(text=element_text(family="Times New Roman"))
+#ggsave("figure2.png")
 ```
+
+
+
+## Combined SVM with 10-fold cross validation
+```{r}
+k <- 10
+folds <- sample(rep(1:k, length.out = nrow(friends_voice_alm_data)), nrow(friends_voice_alm_data)) 
+```
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+```{r}
+pred_combined_ten <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_ten$pred, pred_combined_ten$true)
+```
+
+```{r}
+roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T)
+```
+
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T))
+```
+
+
+## SVMs on separated sexes
+
+Boys:
+```{r}
+friends_voice_alm_data_boys <- friends_voice_alm_data %>% left_join(ccc2_ados_scores) %>% filter(child_gender == 1) %>% select(-starts_with("ados"))
+```
+
+
+```{r}
+k <- 113
+folds <- c(1:113)
+```
+
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data_boys[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data_boys[folds == x, ])
+  true <- friends_voice_alm_data_boys$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data_boys[folds == x, ], probability = T), "probabilities")[1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+
+
+```{r}
+pred_combined_boys <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_boys$pred, pred_combined_boys$true)
+```
+
+```{r}
+roc(response = pred_combined_boys$true, predictor = pred_combined_boys$prob_asd, ci = T)
+```
+
+
+Girls:
+```{r}
+friends_voice_alm_data_girls <- friends_voice_alm_data %>% left_join(ccc2_ados_scores) %>% filter(child_gender == 2)
+```
+
+```{r}
+k <- 45
+folds <- c(1:45) 
+```
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data_girls[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data_girls[folds == x, ])
+  true <- friends_voice_alm_data_girls$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data_girls[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_combined_girls <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_girls$pred, pred_combined_girls$true)
+```
+
+```{r}
+roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T)
+```
+
+Testing significance:
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_boys$true, predictor = pred_combined_boys$prob_asd, ci = T))
+```
+
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T))
+```
+
+## RFE feature selection
+This section uses this source code: https://github.com/johncolby/SVM-RFE
+
+```{r}
+friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time)
+```
+
+Order of columns for RFE:
+1- MLUM
+2- NDWR
+3- content_ratio
+4- um_ratio
+5- c_units_per_minute
+6- unintelligible_proportion
+7- repeating_others_prop
+8- Cepstrum
+9- DeltaCepstrum
+10- DeltaDeltaCepstrum
+11- LogSpectralEntropy
+12- F0
+13- Jitter
+14- Shimmer
+15- HNR
+16- H1H2
+17- RMS
+
+
+```{r}
+set.seed(42)
+results <- svmRFE(friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time), k = 158)
+```
+
+Order of importance from greatest to least
+```{r}
+results
+```
+
+Ranked importance by name:
+content, CPM, RMS, um, F0, Shimmer, MLUM, HNR, DeltaCepstrum, NDWR, LogSpectralEntropy, Cepstrum, Jitter, DeltaDeltaCepstrum, unintelligible, H1H2, repeating
+
+Removing 5 lowest importance features:
+```{r}
+k <- 158
+folds <- c(1:158)
+```
+
+```{r}
+set.seed(42)
+z <- lapply(1:k, function(x){
+  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + LogSpectralEntropy + F0 + Shimmer + HNR + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  pred <- predict(model, friends_voice_alm_data[folds == x, ])
+  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
+  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
+  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
+})
+```
+
+```{r}
+pred_combined_small <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_small$pred, pred_combined_small$true)
+```
+
+```{r}
+roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T)
+```
+
+```{r}
+roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T))
+```
+
 
 ## Table 3: Post-hoc analysis of characteristics of detected and missed participants
 
@@ -861,76 +1043,6 @@ wilcox.test(total_num_words_fluent_intelligible ~ missed_by_combined, data = non
 wilcox.test(activity_time ~ missed_by_combined, data = non_asd_missed)
 ```
 
-## RFE feature selection
-
-```{r}
-friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time)
-```
-
-Order of columns for RFE:
-1- MLUM
-2- NDWR
-3- content_ratio
-4- um_ratio
-5- c_units_per_minute
-6- unintelligible_proportion
-7- repeating_others_prop
-8- Cepstrum
-9- DeltaCepstrum
-10- DeltaDeltaCepstrum
-11- LogSpectralEntropy
-12- F0
-13- Jitter
-14- Shimmer
-15- HNR
-16- H1H2
-17- RMS
-
-
-```{r}
-set.seed(42)
-results <- svmRFE(friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time), k = 158)
-```
-
-Order of importance from greatest to least
-```{r}
-results
-```
-
-Ranked importance by name:
-content, CPM, RMS, um, F0, Shimmer, MLUM, HNR, DeltaCepstrum, NDWR, LogSpectralEntropy, Cepstrum, Jitter, DeltaDeltaCepstrum, unintelligible, H1H2, repeating
-
-Removing 5 lowest importance features:
-```{r}
-k <- 158
-folds <- c(1:158)
-```
-
-```{r}
-set.seed(42)
-z <- lapply(1:k, function(x){
-  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + LogSpectralEntropy + F0 + Shimmer + HNR + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
-  pred <- predict(model, friends_voice_alm_data[folds == x, ])
-  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
-  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
-  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
-})
-```
-
-```{r}
-pred_combined_small <- do.call(rbind, z)
-caret::confusionMatrix(pred_combined_small$pred, pred_combined_small$true)
-```
-
-
-```{r}
-roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T)
-```
-
-```{r}
-roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T))
-```
-
 ## Supplemental table 2: Logistic regression models
 
 ```{r}
@@ -1278,112 +1390,4 @@ caret::confusionMatrix(pred_combined$pred, pred_combined$true)
 
 ```{r}
 roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T)
-```
-
-
-## Combined SVM with 10-fold cross validation
-```{r}
-k <- 10
-folds <- sample(rep(1:k, length.out = nrow(friends_voice_alm_data)), nrow(friends_voice_alm_data)) 
-```
-
-```{r}
-set.seed(42)
-z <- lapply(1:k, function(x){
-  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
-  pred <- predict(model, friends_voice_alm_data[folds == x, ])
-  true <- friends_voice_alm_data$diagnosis_binary[folds == x]
-  prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
-  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
-})
-```
-
-
-```{r}
-pred_combined_ten <- do.call(rbind, z)
-caret::confusionMatrix(pred_combined_ten$pred, pred_combined_ten$true)
-```
-
-```{r}
-roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T)
-```
-
-```{r}
-roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T))
-```
-
-## SVMs on separated sexes
-
-Boys:
-```{r}
-friends_voice_alm_data_boys <- friends_voice_alm_data %>% left_join(ccc2_ados_scores) %>% filter(child_gender == 1) %>% select(-starts_with("ados"))
-```
-
-
-```{r}
-k <- 113
-folds <- c(1:113)
-```
-
-
-```{r}
-set.seed(42)
-z <- lapply(1:k, function(x){
-  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data_boys[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
-  pred <- predict(model, friends_voice_alm_data_boys[folds == x, ])
-  true <- friends_voice_alm_data_boys$diagnosis_binary[folds == x]
-  prob_asd <- attr(predict(model, friends_voice_alm_data_boys[folds == x, ], probability = T), "probabilities")[1]
-  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
-})
-```
-
-
-
-```{r}
-pred_combined_boys <- do.call(rbind, z)
-caret::confusionMatrix(pred_combined_boys$pred, pred_combined_boys$true)
-```
-
-```{r}
-roc(response = pred_combined_boys$true, predictor = pred_combined_boys$prob_asd, ci = T)
-```
-
-
-Girls:
-```{r}
-friends_voice_alm_data_girls <- friends_voice_alm_data %>% left_join(ccc2_ados_scores) %>% filter(child_gender == 2)
-```
-
-```{r}
-k <- 45
-folds <- c(1:45) 
-```
-
-```{r}
-set.seed(42)
-z <- lapply(1:k, function(x){
-  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + DeltaDeltaCepstrum + LogSpectralEntropy + F0 + Jitter + Shimmer + HNR + H1H2 + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute + unintelligible_proportion + repeating_others_prop, data = friends_voice_alm_data_girls[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
-  pred <- predict(model, friends_voice_alm_data_girls[folds == x, ])
-  true <- friends_voice_alm_data_girls$diagnosis_binary[folds == x]
-  prob_asd <- attr(predict(model, friends_voice_alm_data_girls[folds == x, ], probability = T), "probabilities")[,1]
-  return(data.frame(pred = pred, true = true, prob_asd = prob_asd))
-})
-```
-
-```{r}
-pred_combined_girls <- do.call(rbind, z)
-caret::confusionMatrix(pred_combined_girls$pred, pred_combined_girls$true)
-```
-
-```{r}
-roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T)
-```
-
-Testing significance:
-```{r}
-roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_boys$true, predictor = pred_combined_boys$prob_asd, ci = T))
-```
-
-```{r}
-roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T))
 ```
