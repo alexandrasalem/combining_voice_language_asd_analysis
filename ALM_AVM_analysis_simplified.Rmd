@@ -277,6 +277,7 @@ ggplot(roc_data_plot, aes(m = pred, d =diag)) +
 
 ## Combined SVM with 10-fold cross validation
 ```{r}
+set.seed(42)
 k <- 10
 folds <- sample(rep(1:k, length.out = nrow(friends_voice_alm_data)), nrow(friends_voice_alm_data)) 
 ```
@@ -383,56 +384,53 @@ roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, 
 roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_girls$true, predictor = pred_combined_girls$prob_asd, ci = T))
 ```
 
-## RFE feature selection
+## mSVM-RFE feature selection
 This section uses this source code: https://github.com/johncolby/SVM-RFE
 
-```{r}
-friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time)
-```
-
-Order of columns for RFE:
-1- MLUM
-2- NDWR
-3- content_ratio
-4- um_ratio
-5- c_units_per_minute
-6- unintelligible_proportion
-7- repeating_others_prop
-8- Cepstrum
-9- DeltaCepstrum
-10- DeltaDeltaCepstrum
-11- LogSpectralEntropy
-12- F0
-13- Jitter
-14- Shimmer
-15- HNR
-16- H1H2
-17- RMS
-
+Full generalization error:
 
 ```{r}
 set.seed(42)
-results <- svmRFE(friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time), k = 158)
+nfold = 10
+nrows = 158
+folds = rep(1:nfold, len=nrows)[sample(nrows)]
+folds = lapply(1:nfold, function(x) which(folds == x))
+results = lapply(folds, svmRFE.wrap, friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time), k=10)
+```
+```{r}
+top.features = WriteFeatures(results, friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time), save=F)
 ```
 
-Order of importance from greatest to least
 ```{r}
-results
+featsweep = lapply(1:17, FeatSweep.wrap, results, friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time))
 ```
 
-Ranked importance by name:
-content, CPM, RMS, um, F0, Shimmer, MLUM, HNR, DeltaCepstrum, NDWR, LogSpectralEntropy, Cepstrum, Jitter, DeltaDeltaCepstrum, unintelligible, H1H2, repeating
 
-Removing 5 lowest importance features:
 ```{r}
-k <- 158
-folds <- c(1:158)
+no.info = min(prop.table(table((friends_voice_alm_data %>% select(diagnosis_binary, everything(), -ASDID, -num_utts_total, -total_num_words_fluent_intelligible, -activity_time))[,1])))
+errors = sapply(featsweep, function(x) ifelse(is.null(x), NA, x$error))
+
+dev.new(width=4, height=4, bg='white')
+PlotErrors(errors, no.info=no.info)
+#dev.off()
+```
+
+```{r}
+top.features
+```
+
+
+Keeping only optimal set of 8:
+```{r}
+set.seed(42)
+k <- 10
+folds <- sample(rep(1:k, length.out = nrow(friends_voice_alm_data)), nrow(friends_voice_alm_data)) 
 ```
 
 ```{r}
 set.seed(42)
 z <- lapply(1:k, function(x){
-  model = svm(diagnosis_binary~ Cepstrum + DeltaCepstrum + LogSpectralEntropy + F0 + Shimmer + HNR + RMS + MLUM + NDWR + content_ratio + um_ratio + c_units_per_minute, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
+  model = svm(diagnosis_binary~ content_ratio + c_units_per_minute + RMS + F0 + MLUM + Shimmer + um_ratio + LogSpectralEntropy, data = friends_voice_alm_data[folds != x, ], kernel = "linear", scale = FALSE, cost = 100, probability = T)
   pred <- predict(model, friends_voice_alm_data[folds == x, ])
   true <- friends_voice_alm_data$diagnosis_binary[folds == x]
   prob_asd <- attr(predict(model, friends_voice_alm_data[folds == x, ], probability = T), "probabilities")[,1]
@@ -441,17 +439,18 @@ z <- lapply(1:k, function(x){
 ```
 
 ```{r}
-pred_combined_small <- do.call(rbind, z)
-caret::confusionMatrix(pred_combined_small$pred, pred_combined_small$true)
+pred_combined_small_best <- do.call(rbind, z)
+caret::confusionMatrix(pred_combined_small_best$pred, pred_combined_small_best$true)
 ```
 
 ```{r}
-roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T)
+roc(response = pred_combined_small_best$true, predictor = pred_combined_small_best$prob_asd, ci = T)
 ```
 
 ```{r}
-roc.test(roc(response = pred_combined$true, predictor = pred_combined$prob_asd, ci = T), roc(response = pred_combined_small$true, predictor = pred_combined_small$prob_asd, ci = T))
+roc.test(roc(response = pred_combined_ten$true, predictor = pred_combined_ten$prob_asd, ci = T), roc(response = pred_combined_small_best$true, predictor = pred_combined_small_best$prob_asd, ci = T))
 ```
+
 
 
 ## Table 3: Post-hoc analysis of characteristics of detected and missed participants
